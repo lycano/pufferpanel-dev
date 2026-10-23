@@ -12,8 +12,13 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                       `pr PufferPanel-fix-hotkeys` (a bare name is looked up next to this repo, otherwise the path is
                       taken as given). A first run or --rebuild builds client/frontend/dist there; each folder has its
                       own data in out/.
+                      If FOLDER does not exist and the upstream folder does, FOLDER is created as a git worktree from
+                      it, at the upstream commit it is on, on the branch pr/<FOLDER without "PufferPanel-">
+                      (`pr PufferPanel-fix-hotkeys` -> pr/fix-hotkeys) or --branch NAME; an existing branch is checked
+                      out instead of created.
 
-  ./start-puffer-upstream.py [upstream | pr [FOLDER]] [--rebuild] [--update] [--add-user] [--watch]
+  ./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
+    --branch     pr FOLDER only, when FOLDER is created: the branch for it (default pr/<FOLDER without "PufferPanel-">)
     --rebuild    rebuild the frontend first
     --update     upstream only: move the worktree to the latest upstream/v3, rebuild
     --add-user   add another user before starting
@@ -129,6 +134,7 @@ def parse_args():
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("target", nargs="?", choices=("upstream", "pr"), default="upstream")
     p.add_argument("folder", nargs="?")
+    p.add_argument("--branch")
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--update", action="store_true")
     p.add_argument("--add-user", action="store_true")
@@ -142,22 +148,55 @@ def parse_args():
         die(f"unknown option: {' '.join(unknown)} (see --help)")
     if a.folder and a.target != "pr":
         die("a folder can only be given for the pr target: start-puffer-upstream.py pr FOLDER")
+    if a.branch and not a.folder:
+        die("--branch only applies when a new pr FOLDER is created: start-puffer-upstream.py pr FOLDER --branch NAME")
     if a.update:
         a.rebuild = True
     return a
 
 
-def pr_folder(name):
-    """The PR checkout to run: PufferPanel/ by default; a bare name is looked up next to this repo, a path as given."""
+def pr_folder(name, branch=None):
+    """The PR checkout to run: PufferPanel/ by default; a bare name is looked up next to this repo, a path as given.
+    A folder that does not exist yet is created as a worktree from the upstream folder (see create_pr_worktree)."""
     if not name:
         return PR
     p = Path(name).expanduser()
-    if len(p.parts) == 1 and not p.is_absolute() and (BASE / p).is_dir():
+    if len(p.parts) == 1 and not p.is_absolute():
         p = BASE / p
     p = p.resolve()
+    if not p.exists():
+        create_pr_worktree(p, branch)
+    elif branch:
+        die(f"--branch only applies when {p} is created; it exists already")
     if not (p / ".git").exists() or not (p / "client" / "frontend").is_dir():
         die(f"{p} is not a PufferPanel checkout (no .git or client/frontend)")
     return p
+
+
+def create_pr_worktree(p, branch):
+    """Creates the PR folder p as a git worktree from the upstream folder (PufferPanel-upstream/, itself a worktree of
+    the fork), at the upstream commit it is on. Branch: --branch, else pr/<folder name without "PufferPanel-">; an
+    existing branch is checked out instead of created."""
+    if not (UP / ".git").exists():
+        die(f"{p} does not exist and there is no upstream folder {UP} to create it from; "
+            f"run `start-puffer-upstream.py upstream` once first, or create the worktree yourself (see README.md)")
+    if not p.parent.is_dir():
+        die(f"{p.parent} does not exist")
+    if not branch:
+        stem = p.name[len("PufferPanel-"):] if p.name.startswith("PufferPanel-") else p.name
+        branch = f"pr/{stem.lower()}"
+    base = git(UP, "rev-parse", "HEAD", capture=True)
+    exists = subprocess.run(["git", "-C", str(UP), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                            env=ENV).returncode == 0
+    if exists:
+        say(f"creating the worktree {p} on the existing branch {branch}")
+        git(UP, "worktree", "add", str(p), branch)
+    else:
+        say(f"creating the worktree {p}: new branch {branch} from the upstream folder "
+            f"({git(UP, 'log', '--oneline', '-1', capture=True)})")
+        # from the commit, not from upstream/v3: the branch then tracks nothing, so a later `git push -u origin`
+        # sets it to the fork instead of PufferPanel/PufferPanel
+        git(UP, "worktree", "add", "-b", branch, str(p), base)
 
 
 def prepare_upstream(d, a):
@@ -262,7 +301,7 @@ def main():
     if a.target == "pr":
         if a.update:
             die("--update only applies to upstream; the PR folder is not changed by this script")
-        d = pr_folder(a.folder)
+        d = pr_folder(a.folder, a.branch)
         print(f"PR checkout {d}: {git(d, 'branch', '--show-current', capture=True)} "
               f"{git(d, 'log', '--oneline', '-1', capture=True)}")
         if git(d, "status", "--porcelain", "--", "client/yarn.lock", capture=True):

@@ -45,12 +45,23 @@ This repo and both PufferPanel folders sit side by side in one parent folder:
 ```
 
 `PufferPanel-upstream/` is the baseline: stock `v3` to compare against and to reproduce upstream bugs, without
-switching the branch in `PufferPanel/`. For a second PR alongside the first, add a worktree instead of switching
-branches:
+switching the branch in `PufferPanel/`. For a second PR alongside the first, use a worktree instead of switching
+branches. The script creates it when the folder does not exist yet and `PufferPanel-upstream/` does:
+
+```bash
+./pufferpanel-dev/start-puffer-upstream.py pr PufferPanel-my-fix --watch
+```
+
+This creates `../PufferPanel-my-fix` as a git worktree from `PufferPanel-upstream/`, at the upstream commit that
+folder is on, on the new branch `pr/my-fix` (the folder name without `PufferPanel-`). `--branch NAME` picks another
+branch name, and a branch that exists already is checked out instead of created. The new branch tracks nothing, so
+push it with `git push -u origin pr/my-fix`. Then the first run installs, builds and asks for a first admin as usual.
+To start from the latest upstream, run `start-puffer-upstream.py --update` before that.
+
+The same by hand:
 
 ```bash
 git -C PufferPanel worktree add ../PufferPanel-my-fix -b pr/my-fix upstream/v3
-./pufferpanel-dev/start-puffer-upstream.py pr PufferPanel-my-fix --watch
 ```
 
 ### 2. Tools
@@ -128,12 +139,13 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 ## Usage
 
 ```
-./start-puffer-upstream.py [upstream | pr [FOLDER]] [--rebuild] [--update] [--add-user] [--watch]
+./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
 ```
 
 | Option | Effect |
 |---|---|
-| `upstream` (default) / `pr [FOLDER]` | which clone: `../PufferPanel-upstream`, or `../PufferPanel` (default) / `FOLDER` for `pr`. A bare name like `PufferPanel-my-fix` is looked up next to this repo, any other path is taken as given |
+| `upstream` (default) / `pr [FOLDER]` | which clone: `../PufferPanel-upstream`, or `../PufferPanel` (default) / `FOLDER` for `pr`. A bare name like `PufferPanel-my-fix` is looked up next to this repo, any other path is taken as given. A `FOLDER` that does not exist yet is created as a worktree from `PufferPanel-upstream/` (see [Folder layout](#1-folder-layout)) |
+| `--branch NAME` | only with a `pr FOLDER` that gets created: its branch (default `pr/<FOLDER without PufferPanel->`) |
 | `--watch` | hot reload: Vite on :5173 + air on :8080. Without it, the panel runs once on :8080 from the embedded build |
 | `--rebuild` | build the frontend again first (needed without `--watch` to see frontend changes on :8080) |
 | `--update` | upstream only: move the worktree to the latest `upstream/v3`, rebuild |
