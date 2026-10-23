@@ -7,10 +7,13 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                       PR checkout. The PR folder is only touched by `git fetch upstream` and the worktree entry in its
                       .git. First run: creates the worktree, builds the frontend from upstream's lock file, asks for a
                       first admin, starts the panel.
-  pr                  the PR checkout PufferPanel/ on whatever branch it is (e.g. pr/my-feature), as it is: no git
-                      commands, no lock file changes. A first run or --rebuild builds client/frontend/dist there.
+  pr [FOLDER]         a PR checkout on whatever branch it is (e.g. pr/my-feature), as it is: no git commands, no lock
+                      file changes. FOLDER defaults to PufferPanel/; give another checkout or worktree of the fork, e.g.
+                      `pr PufferPanel-fix-hotkeys` (a bare name is looked up next to this repo, otherwise the path is
+                      taken as given). A first run or --rebuild builds client/frontend/dist there; each folder has its
+                      own data in out/.
 
-  ./start-puffer-upstream.py [upstream|pr] [--rebuild] [--update] [--add-user] [--watch]
+  ./start-puffer-upstream.py [upstream | pr [FOLDER]] [--rebuild] [--update] [--add-user] [--watch]
     --rebuild    rebuild the frontend first
     --update     upstream only: move the worktree to the latest upstream/v3, rebuild
     --add-user   add another user before starting
@@ -125,6 +128,7 @@ def find_air():
 def parse_args():
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("target", nargs="?", choices=("upstream", "pr"), default="upstream")
+    p.add_argument("folder", nargs="?")
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--update", action="store_true")
     p.add_argument("--add-user", action="store_true")
@@ -136,9 +140,24 @@ def parse_args():
         sys.exit(0)
     if unknown:
         die(f"unknown option: {' '.join(unknown)} (see --help)")
+    if a.folder and a.target != "pr":
+        die("a folder can only be given for the pr target: start-puffer-upstream.py pr FOLDER")
     if a.update:
         a.rebuild = True
     return a
+
+
+def pr_folder(name):
+    """The PR checkout to run: PufferPanel/ by default; a bare name is looked up next to this repo, a path as given."""
+    if not name:
+        return PR
+    p = Path(name).expanduser()
+    if len(p.parts) == 1 and not p.is_absolute() and (BASE / p).is_dir():
+        p = BASE / p
+    p = p.resolve()
+    if not (p / ".git").exists() or not (p / "client" / "frontend").is_dir():
+        die(f"{p} is not a PufferPanel checkout (no .git or client/frontend)")
+    return p
 
 
 def prepare_upstream(d, a):
@@ -243,8 +262,8 @@ def main():
     if a.target == "pr":
         if a.update:
             die("--update only applies to upstream; the PR folder is not changed by this script")
-        d = PR
-        print(f"PR checkout: {git(d, 'branch', '--show-current', capture=True)} "
+        d = pr_folder(a.folder)
+        print(f"PR checkout {d}: {git(d, 'branch', '--show-current', capture=True)} "
               f"{git(d, 'log', '--oneline', '-1', capture=True)}")
         if git(d, "status", "--porcelain", "--", "client/yarn.lock", capture=True):
             print(f"note: client/yarn.lock in {d} has local changes (left as they are)", file=sys.stderr)

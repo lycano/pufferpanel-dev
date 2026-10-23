@@ -40,7 +40,17 @@ This repo and both PufferPanel folders sit side by side in one parent folder:
 <parent>/
 ├── pufferpanel-dev/          this repo
 ├── PufferPanel/              your fork, on your PR branch (e.g. pr/my-feature)
-└── PufferPanel-upstream/     stock upstream v3, a git worktree of PufferPanel/ (created by the script)
+├── PufferPanel-upstream/     stock upstream v3, a git worktree of PufferPanel/ (created by the script)
+└── PufferPanel-<name>/       optional: more worktrees of PufferPanel/, one per PR (`pr PufferPanel-<name>`)
+```
+
+`PufferPanel-upstream/` is the baseline: stock `v3` to compare against and to reproduce upstream bugs, without
+switching the branch in `PufferPanel/`. For a second PR alongside the first, add a worktree instead of switching
+branches:
+
+```bash
+git -C PufferPanel worktree add ../PufferPanel-my-fix -b pr/my-fix upstream/v3
+./pufferpanel-dev/start-puffer-upstream.py pr PufferPanel-my-fix --watch
 ```
 
 ### 2. Tools
@@ -118,12 +128,12 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 ## Usage
 
 ```
-./start-puffer-upstream.py [upstream|pr] [--rebuild] [--update] [--add-user] [--watch]
+./start-puffer-upstream.py [upstream | pr [FOLDER]] [--rebuild] [--update] [--add-user] [--watch]
 ```
 
 | Option | Effect |
 |---|---|
-| `upstream` (default) / `pr` | which clone: `../PufferPanel-upstream` or `../PufferPanel` |
+| `upstream` (default) / `pr [FOLDER]` | which clone: `../PufferPanel-upstream`, or `../PufferPanel` (default) / `FOLDER` for `pr`. A bare name like `PufferPanel-my-fix` is looked up next to this repo, any other path is taken as given |
 | `--watch` | hot reload: Vite on :5173 + air on :8080. Without it, the panel runs once on :8080 from the embedded build |
 | `--rebuild` | build the frontend again first (needed without `--watch` to see frontend changes on :8080) |
 | `--update` | upstream only: move the worktree to the latest `upstream/v3`, rebuild |
@@ -260,7 +270,8 @@ Both are handled in `vite.dev.config.mjs` and only affect the dev server; produc
   server is Vue's `exposeProxy` without `_`. The config rewrites line 42 while serving it, from
   `getGroup(binding.instance)` to `getGroup(binding.instance.$.proxy)`. The file itself is not changed. If upstream
   changes that line, Vite prints `pufferpanel-dev: "getGroup(binding.instance)" not found in hotkeys.js`; check whether
-  the bug is fixed upstream and drop the plugin. Details: `hotkeys-dev-server-bug.md`.
+  the bug is fixed upstream and drop the plugin. The same warning is expected in a checkout that already has the fix
+  (e.g. the PR branch `pr/fix-hotkeys-dev-server`). Details: `hotkeys-dev-server-bug.md`.
 - **WebAssembly errors (`expected magic word 00 61 73 6d`).** `pufferpanel-conditions` loads its `.wasm` relative to
   its own module. Vite's dependency pre-bundling moves the module but not the `.wasm`, so the request returned
   `index.html`. The config excludes the package from pre-bundling.
@@ -284,7 +295,7 @@ Harmless warnings:
 | `note: GOROOT=... does not exist; ignoring it` | your shell has a `GOROOT` from a removed Go version (e.g. after a mise update); the script works around it, a new shell clears it |
 | Go errors about `client/frontend/dist` | the frontend was never built: `--rebuild` |
 | Login works on :8080 but not on :5173 | open the app only on :5173 so the cookie belongs to that origin |
-| Changes do not appear | you are editing the other clone: `pr` serves `PufferPanel/`, `upstream` serves `PufferPanel-upstream/` |
+| Changes do not appear | you are editing the other clone: `pr` serves `PufferPanel/` (or the `FOLDER` given), `upstream` serves `PufferPanel-upstream/` |
 | WSL2: changes do not appear, or everything is slow | the clones are under `/mnt/c`; move them into the Linux filesystem (see [Windows (WSL2)](#windows-wsl2)) |
 | WSL2: `localhost:5173` does not load in the Windows browser | Vite listens on `::1`; use `networkingMode=mirrored` (see [Windows (WSL2)](#windows-wsl2)) |
 
