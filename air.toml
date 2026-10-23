@@ -1,0 +1,23 @@
+# air (github.com/air-verse/air v1.67.4) for PufferPanel's Go code, used by `start-puffer-upstream.py --watch`.
+# Run from the repo root: `air -c <this file>`. Rebuilds on *.go changes and restarts the panel with working dir out/
+# (config.json, pufferpanel.db, servers). The binary goes to out/.air/ (gitignored), not tmp/.
+root = "."
+tmp_dir = "out/.air"
+
+[build]
+cmd = "go build -o out/.air/pufferpanel ./cmd"
+full_bin = "cd out && ./.air/pufferpanel runService"
+include_ext = ["go"]
+exclude_dir = ["client", "node_modules", "out", "tmp", "vendor", ".git"]
+exclude_regex = ["_test\\.go$"]
+delay = 300
+stop_on_error = true
+send_interrupt = true
+kill_delay = 3000 # ms
+
+[build.windows]
+cmd = "go build -o out/.air/pufferpanel.exe ./cmd"
+full_bin = "cd out; ./.air/pufferpanel.exe runService"
+
+[misc]
+clean_on_exit = false
