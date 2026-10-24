@@ -25,7 +25,7 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                       whose folder is already gone just loses its entry. The branch stays in either case.
 
   ./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
-                             [--force]
+                             [--browser | --debug] [--force]
   ./start-puffer-upstream.py list
   ./start-puffer-upstream.py remove FOLDER [--delete-dir | -rm]
     --branch     pr FOLDER only, when FOLDER is created: the branch for it (default pr/<FOLDER without "PufferPanel-">)
@@ -43,6 +43,14 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                  which air rebuilds and restarts on every *.go change. Configs: vite.dev.config.mjs and air.toml next
                  to this script (outside the PufferPanel clones). Writes only gitignored output into the folder
                  (out/.air/, node_modules/.vite/). Needs air v1.67.4: go install github.com/air-verse/air@v1.67.4
+    --browser    with --watch: once Vite answers, open a Chromium window on http://localhost:5173 with its own profile
+                 (~/.cache/pufferpanel-dev-browser, the login stays) and the DevTools debug port 9222 on localhost, so a
+                 script or Claude can attach to the same window (Playwright connectOverCDP). Uses the newest Chromium
+                 Playwright downloaded (~/.cache/ms-playwright). Closing the window keeps air and Vite running; Ctrl+C
+                 closes it too. Anyone who can reach port 9222 controls that browser: use it for the dev panel only.
+    --debug      like --browser but headless: no window, only the debug port 9222 for scripts/Claude, while you keep
+                 your own browser. Same profile, so a login done once in a --browser window carries over (as long as
+                 the panel's login cookie outlives a browser restart).
 Yarn runs as `mise exec yarn@1.22.22 -- yarn` (the repo's packageManager; Yarn 4 cannot run its
 `yarn workspaces run` scripts, and a plain `yarn` in scripts resolves to mise's latest). Data (SQLite pufferpanel.db,
 servers, cache) stays in <folder>/out/. Ctrl+C stops the panel (with --watch: air and Vite).
@@ -68,6 +76,9 @@ THEME_DEV = THEME / "dev.py"
 PANEL_PORT = 8080                       # the panel's default bind; vite.dev.config.mjs proxies to it
 VITE_PORT = 5173                        # server.port in vite.dev.config.mjs
 THEME_PORT = 8100
+BROWSER_PORT = 9222                     # Chrome DevTools Protocol of the --browser window (localhost only)
+BROWSER_PROFILE = Path.home() / ".cache" / "pufferpanel-dev-browser"
+PLAYWRIGHT_BROWSERS = Path.home() / ".cache" / "ms-playwright"
 YARN_VERSION = "1.22.22"
 AIR_VERSION = "v1.67.4"
 WINDOWS = os.name == "nt"
@@ -155,6 +166,8 @@ def parse_args():
     p.add_argument("--update", action="store_true")
     p.add_argument("--add-user", action="store_true")
     p.add_argument("--watch", action="store_true")
+    p.add_argument("--browser", action="store_true")
+    p.add_argument("--debug", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--delete-dir", "-rm", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
@@ -165,7 +178,8 @@ def parse_args():
     if unknown:
         die(f"unknown option: {' '.join(unknown)} (see --help)")
     if a.target in ("list", "remove"):
-        start_options = [o for o in ("branch", "rebuild", "update", "add_user", "watch", "force") if getattr(a, o)]
+        start_options = [o for o in ("branch", "rebuild", "update", "add_user", "watch", "browser", "debug", "force")
+                         if getattr(a, o)]
         if start_options:
             die(f"--{start_options[0].replace('_', '-')} does not apply to {a.target}")
         if a.target == "remove" and not a.folder:
@@ -174,6 +188,10 @@ def parse_args():
             die("list takes no folder and no options")
     elif a.delete_dir:
         die("--delete-dir/-rm only applies to remove: start-puffer-upstream.py remove FOLDER -rm")
+    if a.browser and a.debug:
+        die("--browser and --debug exclude each other (window or headless)")
+    if (a.browser or a.debug) and not a.watch:
+        die(f"--{'browser' if a.browser else 'debug'} needs --watch (it opens the Vite dev server on :5173)")
     if a.folder and a.target not in ("pr", "remove"):
         die("a folder can only be given for the pr target: start-puffer-upstream.py pr FOLDER")
     if a.branch and not a.folder:
@@ -349,6 +367,8 @@ def dev_processes():
             kind = "vite"
         elif args[-1] == "runService" and cwd.name == "out" and cwd.parent.parent == BASE:
             kind = f"panel ({cwd.parent.name})"
+        elif f"--user-data-dir={BROWSER_PROFILE}" in args:
+            kind = "browser"
         if kind:
             found.append((int(entry.name), kind, " ".join(args), cwd))
     return found
@@ -493,7 +513,36 @@ def interrupt(signum, frame):
     raise KeyboardInterrupt
 
 
-def watch(d, air):
+def find_browser():
+    """The newest Chromium that Playwright downloaded, for --browser."""
+    found = sorted(PLAYWRIGHT_BROWSERS.glob("chromium-*/chrome-linux*/chrome"),
+                   key=lambda p: int(p.parts[-3].split("-")[-1]) if p.parts[-3].split("-")[-1].isdigit() else 0)
+    if not found:
+        die(f"--browser needs a Chromium downloaded by Playwright in {PLAYWRIGHT_BROWSERS}; "
+            "install one with: mise exec yarn@1.22.22 -- yarn playwright install chromium")
+    return found[-1]
+
+
+def wait_for_port(port, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if port_in_use(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def open_browser(headless):
+    """--browser (window) / --debug (headless): Chromium on the Vite dev server with the DevTools debug port for
+    scripts and Claude."""
+    BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
+    return start([str(find_browser()), f"--remote-debugging-port={BROWSER_PORT}",
+                  f"--user-data-dir={BROWSER_PROFILE}", "--no-first-run", "--no-default-browser-check",
+                  *(["--headless=new"] if headless else []), f"http://localhost:{VITE_PORT}"], cwd=BROWSER_PROFILE)
+
+
+def watch(d, air, browser=None):
+    """browser: None, "window" (--browser) or "headless" (--debug)."""
     vite_config = DEV / "vite.dev.config.mjs"
     air_config = DEV / "air.toml"
     for f in (vite_config, air_config):
@@ -510,9 +559,18 @@ def watch(d, air):
                                      "--config", str(vite_config)], cwd=d / "client" / "frontend")))
         print(f"\n    open http://localhost:{VITE_PORT}   (Vite, HMR; backend routes proxied to the panel on :{PANEL_PORT})\n"
               "    Ctrl+C stops both\n", flush=True)
-        while all(p.poll() is None for _, p in procs):
+        # air and Vite belong together; the browser window may be closed without stopping them
+        servers = list(procs)
+        if browser:
+            if wait_for_port(VITE_PORT, 60):
+                procs.append(("browser", open_browser(browser == "headless")))
+                print(f"    debug browser ({browser}): DevTools protocol on http://localhost:{BROWSER_PORT} "
+                      f"(Playwright connectOverCDP)\n", flush=True)
+            else:
+                print(f"Vite did not answer on :{VITE_PORT} within 60 s; not opening the browser", file=sys.stderr)
+        while all(p.poll() is None for _, p in servers):
             time.sleep(0.5)
-        for name, p in procs:
+        for name, p in servers:
             if p.poll() is not None:
                 print(f"{name} exited with code {p.returncode}; stopping the rest", file=sys.stderr)
         return 1
@@ -566,7 +624,10 @@ def main():
     # --- first admin, start ------------------------------------------------------------------------------------------
     if a.force:
         stop_running()
-    for port in (PANEL_PORT, VITE_PORT) if a.watch else (PANEL_PORT,):
+    if a.browser or a.debug:
+        find_browser()
+    ports = (PANEL_PORT, VITE_PORT) if a.watch else (PANEL_PORT,)
+    for port in ports + ((BROWSER_PORT,) if a.browser or a.debug else ()):
         if port_in_use(port):
             die(f"port {port} is already in use (the other target or another dev server still running?); stop it first, "
                 f"or start with --force to stop it")
@@ -577,7 +638,7 @@ def main():
         run(["go", "run", "../cmd", "user", "add"], cwd=out_dir)
 
     if a.watch:
-        sys.exit(watch(d, air))
+        sys.exit(watch(d, air, "window" if a.browser else "headless" if a.debug else None))
 
     say(f"starting PufferPanel ({a.target}, {d}) on http://localhost:{PANEL_PORT}; Ctrl+C stops it")
     if THEME_DEV.is_file():

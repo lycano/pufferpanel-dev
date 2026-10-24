@@ -29,6 +29,7 @@ browser ──> http://localhost:5173   Vite dev server: index.html, client-side
 | `air.toml` | Builds `./cmd` into `out/.air/pufferpanel` and runs `runService` with working directory `out/`; watches `*.go` only |
 | `hotkeys-dev-server-bug.md` | Upstream bug report for the `hotkeys.js` issue below |
 | `CONTRIBUTING.md` | How to contribute, especially a tested Windows setup |
+| `TESTING.md`, `tests/` | Playwright UI tests for a running dev instance: how to run them headless or in the Playwright UI |
 
 ## Setup
 
@@ -139,7 +140,7 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 ## Usage
 
 ```
-./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch] [--force]
+./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch] [--browser | --debug] [--force]
 ./start-puffer-upstream.py list
 ./start-puffer-upstream.py remove FOLDER [--delete-dir | -rm]
 ```
@@ -152,6 +153,8 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 | `--rebuild` | build the frontend again first (needed without `--watch` to see frontend changes on :8080) |
 | `--update` | upstream only: move the worktree to the latest `upstream/v3`, rebuild |
 | `--add-user` | add another user before starting |
+| `--browser` | with `--watch`: also opens a Chromium window on :5173 with the debug port 9222 for scripts, see [TESTING.md](TESTING.md#attaching-to-the-panels-browser) |
+| `--debug` | like `--browser` but headless: only the debug port 9222, see [TESTING.md](TESTING.md#attaching-to-the-panels-browser) |
 | `--force` | first stop a dev instance that is still running (another terminal, or leftovers of a closed one). Only touches this setup's processes: other start scripts (get Ctrl+C), air/Vite with the configs here, panels running in a `<clone>/out` next to this repo; force-killed after 8 s. Linux only |
 | `list` | the worktrees linked to `../PufferPanel` (PR folders, `PufferPanel-upstream`): branch, commit, and notes for uncommitted changes, a missing folder, a lock, a dev instance running in it |
 | `remove FOLDER` | unlink the worktree `FOLDER` (looked up like `pr FOLDER`). The files stay as a plain folder without git; the branch stays. A worktree whose folder is already gone only loses its entry. Refused while a dev instance runs in it |
@@ -183,6 +186,8 @@ git -C ../PufferPanel rebase upstream/v3        # on pr/my-feature
    A visible alternative: change `"background_color"` in `webManifest` in `web/loader.go`, then open
    http://localhost:5173/manifest.json.
 5. Revert both changes (`git checkout -- <files>`); `git status` is clean.
+
+For the automated UI tests (headless, Playwright UI, visible browser), see [TESTING.md](TESTING.md).
 
 ## Without the script
 
