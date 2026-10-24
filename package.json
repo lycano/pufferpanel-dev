@@ -3,8 +3,16 @@
   "private": true,
   "description": "Dev-only tooling for the Vite dev server (not part of any PufferPanel tree)",
   "devDependencies": {
+    "@playwright/test": "1.64.0",
     "vite": "7.1.4",
     "vite-plugin-vue-devtools": "8.2.1",
     "vue": "3.5.20"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "playwright test --config tests/playwright.config.js",
+    "test:headed": "SLOWMO=${SLOWMO:-500} playwright test --config tests/playwright.config.js --headed",
+    "test:ui": "playwright test --config tests/playwright.config.js --ui",
+    "test:debug": "playwright test --config tests/playwright.config.js --debug"
   }
 }
