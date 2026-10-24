@@ -18,10 +18,15 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                       out instead of created.
 
   ./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
+                             [--force]
     --branch     pr FOLDER only, when FOLDER is created: the branch for it (default pr/<FOLDER without "PufferPanel-">)
     --rebuild    rebuild the frontend first
     --update     upstream only: move the worktree to the latest upstream/v3, rebuild
     --add-user   add another user before starting
+    --force      first stop a dev instance that is still running (e.g. in another terminal, or left over after the
+                 terminal was closed): other start scripts get Ctrl+C, then air and Vite started with the configs here
+                 and panels running in a <clone>/out folder next to this repo; whatever still runs after 8 s is killed.
+                 Nothing else is touched. Linux only (reads /proc).
     --watch      hot reload for development, for either target. Open http://localhost:5173 (Vite dev server, HMR for
                  client/frontend and client/api of that folder); it proxies the backend routes to the panel on :8080,
                  which air rebuilds and restarts on every *.go change. Configs: vite.dev.config.mjs and air.toml next
@@ -139,6 +144,7 @@ def parse_args():
     p.add_argument("--update", action="store_true")
     p.add_argument("--add-user", action="store_true")
     p.add_argument("--watch", action="store_true")
+    p.add_argument("--force", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
     a, unknown = p.parse_known_args()
     if a.help:
@@ -238,10 +244,39 @@ def start(cmd, cwd, env=ENV):
     return subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
 
 
+def group_alive(pgid):
+    """True while any process of the group still runs (e.g. vite after its parent yarn exited)."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stopped(p, deadline):
+    """Waits for the child and, on POSIX, for the rest of its process group."""
+    try:
+        p.wait(timeout=max(0.1, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        return False
+    if WINDOWS:
+        return True
+    while group_alive(p.pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
 def stop(procs):
     """Stops only the processes this script started (and their process groups)."""
+    if not WINDOWS:
+        # a second Ctrl+C must not abort the cleanup half way and leave children running
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     for name, p in procs:
-        if p.poll() is not None:
+        if p.poll() is not None and (WINDOWS or not group_alive(p.pid)):
             continue
         print(f"stopping {name} (pid {p.pid})", flush=True)
         if WINDOWS:
@@ -250,15 +285,87 @@ def stop(procs):
             os.killpg(p.pid, signal.SIGINT)
     deadline = time.monotonic() + 8
     for name, p in procs:
+        if stopped(p, deadline):
+            continue
+        print(f"{name} (pid {p.pid}) did not stop; killing it", flush=True)
+        if WINDOWS:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        elif group_alive(p.pid):
+            os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+
+
+def dev_processes():
+    """Running processes of this dev setup, as (pid, kind, command line); never this process."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
         try:
-            p.wait(timeout=max(0.1, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            print(f"{name} (pid {p.pid}) did not stop; killing it", flush=True)
-            if WINDOWS:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
-            else:
-                os.killpg(p.pid, signal.SIGKILL)
-            p.wait()
+            args = [x.decode(errors="replace") for x in (entry / "cmdline").read_bytes().split(b"\0") if x]
+            cwd = Path(os.readlink(entry / "cwd"))
+        except OSError:
+            continue
+        if not args:
+            continue
+        kind = None
+        if any(Path(x).name == Path(__file__).name for x in args[:2]):
+            kind = "start script"
+        elif str(DEV / "air.toml") in args:
+            kind = "air"
+        elif str(DEV / "vite.dev.config.mjs") in args:
+            kind = "vite"
+        elif args[-1] == "runService" and cwd.name == "out" and cwd.parent.parent == BASE:
+            kind = f"panel ({cwd.parent.name})"
+        if kind:
+            found.append((int(entry.name), kind, " ".join(args)))
+    return found
+
+
+def signal_all(procs, sig):
+    for pid, kind, cmd in procs:
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+
+
+def wait_gone(pids, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        alive = {pid for pid, _, _ in dev_processes()} & pids
+        if not alive:
+            return set()
+        time.sleep(0.2)
+    return {pid for pid, _, _ in dev_processes()} & pids
+
+
+def stop_running():
+    """--force: stops running dev instances, start scripts first so their own cleanup runs."""
+    if not Path("/proc").is_dir():
+        die("--force needs /proc (Linux); stop the other instance with Ctrl+C in its terminal")
+    procs = dev_processes()
+    if not procs:
+        return
+    for pid, kind, cmd in procs:
+        print(f"stopping {kind} (pid {pid}): {cmd}", flush=True)
+    scripts = [p for p in procs if p[1] == "start script"]
+    signal_all(scripts, signal.SIGINT)
+    wait_gone({pid for pid, _, _ in scripts}, 12)
+    # whatever the scripts did not stop: leftovers of a closed terminal or of an older version of this script
+    rest = [p for p in dev_processes() if p[1] != "start script"]
+    signal_all(rest, signal.SIGINT)
+    left = wait_gone({pid for pid, _, _ in dev_processes()}, 8)
+    for pid, kind, cmd in dev_processes():
+        if pid in left:
+            print(f"{kind} (pid {pid}) did not stop; killing it", flush=True)
+            signal_all([(pid, kind, cmd)], signal.SIGKILL)
+    say("stopped the running dev instance")
+
+
+def interrupt(signum, frame):
+    """Closing the terminal (SIGHUP) or kill (SIGTERM) stops the children like Ctrl+C does."""
+    raise KeyboardInterrupt
 
 
 def watch(d, air):
@@ -268,6 +375,9 @@ def watch(d, air):
         if not f.is_file():
             die(f"missing {f}")
     say(f"starting air ({AIR_VERSION}, Go rebuild on change) and the Vite dev server (HMR)")
+    if not WINDOWS:
+        signal.signal(signal.SIGTERM, interrupt)
+        signal.signal(signal.SIGHUP, interrupt)
     procs = []
     try:
         procs.append(("air", start([air, "-c", str(air_config)], cwd=d)))
@@ -325,9 +435,12 @@ def main():
         yarn1("install", "--frozen-lockfile", cwd=d / "client")
 
     # --- first admin, start ------------------------------------------------------------------------------------------
+    if a.force:
+        stop_running()
     for port in (PANEL_PORT, VITE_PORT) if a.watch else (PANEL_PORT,):
         if port_in_use(port):
-            die(f"port {port} is already in use (the other target or another dev server still running?); stop it first")
+            die(f"port {port} is already in use (the other target or another dev server still running?); stop it first, "
+                f"or start with --force to stop it")
     out_dir = d / "out"
     out_dir.mkdir(exist_ok=True)
     if a.add_user or not has_users(out_dir / "pufferpanel.db"):

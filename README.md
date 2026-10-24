@@ -139,7 +139,7 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 ## Usage
 
 ```
-./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
+./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch] [--force]
 ```
 
 | Option | Effect |
@@ -150,8 +150,10 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 | `--rebuild` | build the frontend again first (needed without `--watch` to see frontend changes on :8080) |
 | `--update` | upstream only: move the worktree to the latest `upstream/v3`, rebuild |
 | `--add-user` | add another user before starting |
+| `--force` | first stop a dev instance that is still running (another terminal, or leftovers of a closed one). Only touches this setup's processes: other start scripts (get Ctrl+C), air/Vite with the configs here, panels running in a `<clone>/out` next to this repo; force-killed after 8 s. Linux only |
 
-Only one target runs at a time: both use ports 8080 and 5173. Ctrl+C stops everything the script started.
+Only one target runs at a time: both use ports 8080 and 5173. Ctrl+C stops everything the script started; to switch
+while another instance still runs, start the new one with `--force`.
 
 Open http://localhost:5173 in watch mode, not :8080: port 8080 serves the frontend embedded in the Go binary, without
 hot reload. Vite listens on `localhost` only; depending on the system that is `::1`, so `127.0.0.1:5173` may not
