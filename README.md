@@ -140,6 +140,8 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 
 ```
 ./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch] [--force]
+./start-puffer-upstream.py list
+./start-puffer-upstream.py remove FOLDER [--delete-dir | -rm]
 ```
 
 | Option | Effect |
@@ -151,6 +153,9 @@ WSL2 or native Windows working, a pull request is welcome; see [CONTRIBUTING.md]
 | `--update` | upstream only: move the worktree to the latest `upstream/v3`, rebuild |
 | `--add-user` | add another user before starting |
 | `--force` | first stop a dev instance that is still running (another terminal, or leftovers of a closed one). Only touches this setup's processes: other start scripts (get Ctrl+C), air/Vite with the configs here, panels running in a `<clone>/out` next to this repo; force-killed after 8 s. Linux only |
+| `list` | the worktrees linked to `../PufferPanel` (PR folders, `PufferPanel-upstream`): branch, commit, and notes for uncommitted changes, a missing folder, a lock, a dev instance running in it |
+| `remove FOLDER` | unlink the worktree `FOLDER` (looked up like `pr FOLDER`). The files stay as a plain folder without git; the branch stays. A worktree whose folder is already gone only loses its entry. Refused while a dev instance runs in it |
+| `--delete-dir`, `-rm` | with `remove`: delete the folder too, including gitignored files such as `out/` (panel data) and `node_modules/`. Refused when the worktree has uncommitted changes |
 
 Only one target runs at a time: both use ports 8080 and 5173. Ctrl+C stops everything the script started; to switch
 while another instance still runs, start the new one with `--force`.

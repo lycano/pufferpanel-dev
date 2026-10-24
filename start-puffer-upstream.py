@@ -17,8 +17,17 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                       (`pr PufferPanel-fix-hotkeys` -> pr/fix-hotkeys) or --branch NAME; an existing branch is checked
                       out instead of created.
 
+  list                lists the worktrees linked to PufferPanel/ (the PR folders and PufferPanel-upstream/): branch,
+                      commit, uncommitted changes, a missing folder, a dev instance running in it.
+  remove FOLDER       unlinks the worktree FOLDER (looked up like `pr FOLDER`) from PufferPanel/. Default: the files
+                      stay as a plain folder without git; --delete-dir deletes the folder too (git refuses when it has
+                      uncommitted changes; gitignored files such as out/ with the panel data go with it). A worktree
+                      whose folder is already gone just loses its entry. The branch stays in either case.
+
   ./start-puffer-upstream.py [upstream | pr [FOLDER] [--branch NAME]] [--rebuild] [--update] [--add-user] [--watch]
                              [--force]
+  ./start-puffer-upstream.py list
+  ./start-puffer-upstream.py remove FOLDER [--delete-dir | -rm]
     --branch     pr FOLDER only, when FOLDER is created: the branch for it (default pr/<FOLDER without "PufferPanel-">)
     --rebuild    rebuild the frontend first
     --update     upstream only: move the worktree to the latest upstream/v3, rebuild
@@ -27,6 +36,8 @@ repo (see README.md): ../PufferPanel (your fork, remote `upstream` = PufferPanel
                  terminal was closed): other start scripts get Ctrl+C, then air and Vite started with the configs here
                  and panels running in a <clone>/out folder next to this repo; whatever still runs after 8 s is killed.
                  Nothing else is touched. Linux only (reads /proc).
+    --delete-dir, -rm
+                 remove only: delete the worktree folder as well (default: keep the files)
     --watch      hot reload for development, for either target. Open http://localhost:5173 (Vite dev server, HMR for
                  client/frontend and client/api of that folder); it proxies the backend routes to the panel on :8080,
                  which air rebuilds and restarts on every *.go change. Configs: vite.dev.config.mjs and air.toml next
@@ -137,7 +148,7 @@ def find_air():
 
 def parse_args():
     p = argparse.ArgumentParser(add_help=False)
-    p.add_argument("target", nargs="?", choices=("upstream", "pr"), default="upstream")
+    p.add_argument("target", nargs="?", choices=("upstream", "pr", "list", "remove"), default="upstream")
     p.add_argument("folder", nargs="?")
     p.add_argument("--branch")
     p.add_argument("--rebuild", action="store_true")
@@ -145,6 +156,7 @@ def parse_args():
     p.add_argument("--add-user", action="store_true")
     p.add_argument("--watch", action="store_true")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--delete-dir", "-rm", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
     a, unknown = p.parse_known_args()
     if a.help:
@@ -152,7 +164,17 @@ def parse_args():
         sys.exit(0)
     if unknown:
         die(f"unknown option: {' '.join(unknown)} (see --help)")
-    if a.folder and a.target != "pr":
+    if a.target in ("list", "remove"):
+        start_options = [o for o in ("branch", "rebuild", "update", "add_user", "watch", "force") if getattr(a, o)]
+        if start_options:
+            die(f"--{start_options[0].replace('_', '-')} does not apply to {a.target}")
+        if a.target == "remove" and not a.folder:
+            die("remove needs the worktree folder: start-puffer-upstream.py remove FOLDER [--delete-dir | -rm]")
+        if a.target == "list" and (a.folder or a.delete_dir):
+            die("list takes no folder and no options")
+    elif a.delete_dir:
+        die("--delete-dir/-rm only applies to remove: start-puffer-upstream.py remove FOLDER -rm")
+    if a.folder and a.target not in ("pr", "remove"):
         die("a folder can only be given for the pr target: start-puffer-upstream.py pr FOLDER")
     if a.branch and not a.folder:
         die("--branch only applies when a new pr FOLDER is created: start-puffer-upstream.py pr FOLDER --branch NAME")
@@ -161,15 +183,20 @@ def parse_args():
     return a
 
 
+def resolve_folder(name):
+    """A bare name is looked up next to this repo, any other path is taken as given."""
+    p = Path(name).expanduser()
+    if len(p.parts) == 1 and not p.is_absolute():
+        p = BASE / p
+    return p.resolve()
+
+
 def pr_folder(name, branch=None):
     """The PR checkout to run: PufferPanel/ by default; a bare name is looked up next to this repo, a path as given.
     A folder that does not exist yet is created as a worktree from the upstream folder (see create_pr_worktree)."""
     if not name:
         return PR
-    p = Path(name).expanduser()
-    if len(p.parts) == 1 and not p.is_absolute():
-        p = BASE / p
-    p = p.resolve()
+    p = resolve_folder(name)
     if not p.exists():
         create_pr_worktree(p, branch)
     elif branch:
@@ -301,7 +328,7 @@ def stop(procs):
 
 
 def dev_processes():
-    """Running processes of this dev setup, as (pid, kind, command line); never this process."""
+    """Running processes of this dev setup, as (pid, kind, command line, working directory); never this process."""
     found = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
@@ -323,12 +350,12 @@ def dev_processes():
         elif args[-1] == "runService" and cwd.name == "out" and cwd.parent.parent == BASE:
             kind = f"panel ({cwd.parent.name})"
         if kind:
-            found.append((int(entry.name), kind, " ".join(args)))
+            found.append((int(entry.name), kind, " ".join(args), cwd))
     return found
 
 
 def signal_all(procs, sig):
-    for pid, kind, cmd in procs:
+    for pid, *_ in procs:
         try:
             os.kill(pid, sig)
         except ProcessLookupError:
@@ -338,11 +365,11 @@ def signal_all(procs, sig):
 def wait_gone(pids, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        alive = {pid for pid, _, _ in dev_processes()} & pids
+        alive = {pid for pid, *_ in dev_processes()} & pids
         if not alive:
             return set()
         time.sleep(0.2)
-    return {pid for pid, _, _ in dev_processes()} & pids
+    return {pid for pid, *_ in dev_processes()} & pids
 
 
 def stop_running():
@@ -352,20 +379,113 @@ def stop_running():
     procs = dev_processes()
     if not procs:
         return
-    for pid, kind, cmd in procs:
+    for pid, kind, cmd, _ in procs:
         print(f"stopping {kind} (pid {pid}): {cmd}", flush=True)
     scripts = [p for p in procs if p[1] == "start script"]
     signal_all(scripts, signal.SIGINT)
-    wait_gone({pid for pid, _, _ in scripts}, 12)
+    wait_gone({pid for pid, *_ in scripts}, 12)
     # whatever the scripts did not stop: leftovers of a closed terminal or of an older version of this script
     rest = [p for p in dev_processes() if p[1] != "start script"]
     signal_all(rest, signal.SIGINT)
-    left = wait_gone({pid for pid, _, _ in dev_processes()}, 8)
-    for pid, kind, cmd in dev_processes():
-        if pid in left:
-            print(f"{kind} (pid {pid}) did not stop; killing it", flush=True)
-            signal_all([(pid, kind, cmd)], signal.SIGKILL)
+    left = wait_gone({pid for pid, *_ in dev_processes()}, 8)
+    for p in dev_processes():
+        if p[0] in left:
+            print(f"{p[1]} (pid {p[0]}) did not stop; killing it", flush=True)
+            signal_all([p], signal.SIGKILL)
     say("stopped the running dev instance")
+
+
+def worktrees():
+    """The checkouts of the fork from `git worktree list --porcelain`, as dicts with the keys worktree, HEAD and
+    branch/detached, prunable, locked where set (value True or git's text) and main (PufferPanel/ itself, first)."""
+    trees = []
+    for block in git(PR, "worktree", "list", "--porcelain", capture=True).split("\n\n"):
+        t = {"main": not trees}
+        for line in block.splitlines():
+            key, _, value = line.partition(" ")
+            t[key] = value or True
+        t["path"] = Path(t["worktree"])
+        trees.append(t)
+    return trees
+
+
+def running_in(d, procs):
+    """The processes of procs (from dev_processes) that work inside the checkout d: air, Vite, the panel."""
+    return [p for p in procs if p[3] == d or d in p[3].parents]
+
+
+def list_worktrees():
+    procs = dev_processes() if Path("/proc").is_dir() else []
+    rows = []
+    for t in worktrees():
+        p = t["path"]
+        notes = []
+        if t["main"]:
+            notes.append("main checkout, not removable")
+        if p == UP:
+            notes.append("upstream target")
+        if "prunable" in t:
+            notes.append("folder missing")
+        else:
+            changes = git(p, "status", "--porcelain", capture=True).splitlines()
+            if changes:
+                notes.append(f"{len(changes)} uncommitted")
+        if "locked" in t:
+            notes.append("locked")
+        if running_in(p, procs):
+            notes.append("running")
+        rows.append((p.name if p.parent == BASE else str(p),
+                     t["branch"].removeprefix("refs/heads/") if "branch" in t else "(detached)",
+                     git(PR, "log", "-1", "--format=%h %<(60,trunc)%s", t["HEAD"], capture=True),
+                     ", ".join(notes)))
+    widths = [max(len(r[i]) for r in rows) for i in range(2)]
+    for name, branch, commit, notes in rows:
+        print(f"{name:<{widths[0]}}  {branch:<{widths[1]}}  {commit}" + (f"  [{notes}]" if notes else ""))
+
+
+def remove_worktree(name, delete_dir):
+    """Unlinks the worktree name from the fork; keeps its files unless delete_dir. The branch always stays."""
+    p = resolve_folder(name)
+    t = next((t for t in worktrees() if t["path"] == p), None)
+    if not t:
+        die(f"{p} is not a worktree of {PR}; see `start-puffer-upstream.py list`")
+    if t["main"]:
+        die(f"{p} is the main checkout that holds the git data of all worktrees; it cannot be removed")
+    if "locked" in t:
+        die(f"{p} is locked; unlock it first: git -C {PR} worktree unlock {p}")
+    branch = t["branch"].removeprefix("refs/heads/") if "branch" in t else None
+    kept = f"; the branch {branch} stays" if branch else ""
+    if "prunable" in t:
+        git(PR, "worktree", "remove", str(p))
+        say(f"removed the entry of {p} (the folder was already gone){kept}")
+        return
+    running = running_in(p, dev_processes()) if Path("/proc").is_dir() else []
+    if running:
+        for pid, kind, cmd, _ in running:
+            print(f"running in {p}: {kind} (pid {pid}): {cmd}", file=sys.stderr)
+        die("stop it first (Ctrl+C in its terminal); nothing was removed")
+    changes = git(p, "status", "--porcelain", capture=True)
+    if delete_dir:
+        if changes:
+            print(f"uncommitted changes in {p}:", file=sys.stderr)
+            git(p, "status", "--short")
+            die("commit, stash or discard them first; nothing was removed")
+        data = " and its panel data in out/" if (p / "out").is_dir() else ""
+        say(f"deleting {p}{data}")
+        git(PR, "worktree", "remove", str(p))
+        say(f"removed the worktree {p}{kept}")
+        return
+    # git has no "remove but keep the files": drop the worktree's entry in the fork's .git and the .git file that
+    # points to it, then the folder is plain files
+    gitdir = Path(git(p, "rev-parse", "--absolute-git-dir", capture=True))
+    if gitdir.parent.name != "worktrees" or not (p / ".git").is_file():
+        die(f"unexpected git layout in {p} (git dir {gitdir}); nothing was removed")
+    (p / ".git").unlink()
+    shutil.rmtree(gitdir)
+    say(f"unlinked {p}: no longer a git worktree, the files stay{kept}")
+    if changes:
+        print(f"note: its {len(changes.splitlines())} uncommitted changes are only in the files now, not in git")
+    print(f"delete the folder later with: rm -rf {p}")
 
 
 def interrupt(signum, frame):
@@ -404,14 +524,18 @@ def watch(d, air):
 
 def main():
     a = parse_args()
+    if not (PR / ".git").exists():
+        die(f"{PR} not found: clone your PufferPanel fork there first (see {DEV / 'README.md'})")
+    if a.target == "list":
+        return list_worktrees()
+    if a.target == "remove":
+        return remove_worktree(a.folder, a.delete_dir)
     try:
         out = run(["mise", "exec", f"yarn@{YARN_VERSION}", "--", "yarn", "--version"], capture=True, check=False)
     except FileNotFoundError:
         out = ""
     if out != YARN_VERSION:
         die(f"Yarn {YARN_VERSION} is not available through mise; install it: mise install yarn@{YARN_VERSION}")
-    if not (PR / ".git").exists():
-        die(f"{PR} not found: clone your PufferPanel fork there first (see {DEV / 'README.md'})")
 
     if a.target == "pr":
         if a.update:
