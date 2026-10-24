@@ -1,0 +1,10 @@
+{
+  "name": "pufferpanel-dev",
+  "private": true,
+  "description": "Dev-only tooling for the Vite dev server (not part of any PufferPanel tree)",
+  "devDependencies": {
+    "vite": "7.1.4",
+    "vite-plugin-vue-devtools": "8.2.1",
+    "vue": "3.5.20"
+  }
+}

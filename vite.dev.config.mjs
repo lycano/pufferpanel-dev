@@ -8,6 +8,8 @@
 // changeOrigin stays false: Go sees Host localhost:5173 and its host-only cookies (puffer_auth, ...) stay on :5173.
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+// installed in this repo (package.json here), never in a PufferPanel tree; Alt+Shift+D in the page, or /__devtools__/
+import vueDevTools from 'vite-plugin-vue-devtools'
 
 const frontend = process.cwd()
 const backend = 'http://localhost:8080'
@@ -40,7 +42,7 @@ const hotkeysDevFix = {
 export default {
   ...base,
   root: frontend,
-  plugins: [...base.plugins, hotkeysDevFix],
+  plugins: [...base.plugins, hotkeysDevFix, vueDevTools()],
   resolve: {
     ...base.resolve,
     // the `pufferpanel` API client from source, so changes in client/api hot-reload too (no dist build needed)
