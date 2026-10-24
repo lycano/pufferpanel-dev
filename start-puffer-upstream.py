@@ -192,17 +192,22 @@ def create_pr_worktree(p, branch):
         stem = p.name[len("PufferPanel-"):] if p.name.startswith("PufferPanel-") else p.name
         branch = f"pr/{stem.lower()}"
     base = git(UP, "rev-parse", "HEAD", capture=True)
+    # a folder deleted by hand stays registered as worktree ("prunable"); -f reuses exactly that entry
+    registered = f"worktree {p}" in git(UP, "worktree", "list", "--porcelain", capture=True).splitlines()
+    force = ["-f"] if registered else []
+    if registered:
+        say(f"{p} is still registered as a git worktree but the folder is gone; reusing the entry")
     exists = subprocess.run(["git", "-C", str(UP), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                             env=ENV).returncode == 0
     if exists:
         say(f"creating the worktree {p} on the existing branch {branch}")
-        git(UP, "worktree", "add", str(p), branch)
+        git(UP, "worktree", "add", *force, str(p), branch)
     else:
         say(f"creating the worktree {p}: new branch {branch} from the upstream folder "
             f"({git(UP, 'log', '--oneline', '-1', capture=True)})")
         # from the commit, not from upstream/v3: the branch then tracks nothing, so a later `git push -u origin`
         # sets it to the fork instead of PufferPanel/PufferPanel
-        git(UP, "worktree", "add", "-b", branch, str(p), base)
+        git(UP, "worktree", "add", *force, "-b", branch, str(p), base)
 
 
 def prepare_upstream(d, a):
